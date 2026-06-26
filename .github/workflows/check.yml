@@ -1,0 +1,39 @@
+name: Provera stanova
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # svakih 30 min (GitHub zna da kasni par min — to je ok)
+  workflow_dispatch: {}        # dugme za ručno pokretanje
+
+permissions:
+  contents: write              # da može da upiše seen.json nazad u repo
+
+jobs:
+  proveri:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: provera-stanova
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instaliraj zavisnosti
+        run: pip install -r requirements.txt
+
+      - name: Pokreni proveru
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python monitor.py
+
+      - name: Sačuvaj stanje (seen.json)
+        run: |
+          git config user.name "stan-monitor"
+          git config user.email "bot@users.noreply.github.com"
+          git add seen.json
+          git diff --staged --quiet || git commit -m "azuriraj seen.json"
+          git push
