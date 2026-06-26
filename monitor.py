@@ -207,6 +207,28 @@ def _sobe_iz_teksta(t: str):
 # pokretanja ("kalibracija"). Svaki scraper hvata greške i prijavljuje koliko
 # je oglasa našao, da se vidi šta radi.
 
+def probe(naziv: str, url: str) -> None:
+    """Dijagnostika: pokaže kako je podatak spakovan na stranici."""
+    print(f"\n===== PROBE {naziv} =====")
+    print(f"URL: {url}")
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=30)
+        t = r.text
+        print(f"status={r.status_code}  duzina_html={len(t)}")
+        print(f"__NUXT__={'__NUXT__' in t}  __NUXT_DATA__={'__NUXT_DATA__' in t}  "
+              f"application/json blokova={t.count('application/json')}")
+        for kljuc in ['€', '"price"', '"cena"', 'priceForRent', '"rooms"',
+                      '"structure"', 'eur', 'product-item']:
+            i = t.find(kljuc)
+            if i != -1:
+                isecak = t[max(0, i - 110): i + 170].replace("\n", " ").replace("\t", " ")
+                print(f"--- oko {kljuc!r} (poz {i}): {isecak}")
+            else:
+                print(f"--- {kljuc!r}: NEMA")
+    except Exception as e:
+        print(f"PROBE greška: {e}")
+
+
 def scrape_4zida() -> list:
     url = (f"https://www.4zida.rs/izdavanje-stanova/novi-beograd"
            f"?cena_d=0&cena_g={CENA_MAX}&valuta=eur")
@@ -314,6 +336,12 @@ def main():
 
     seen = load_seen() if not test else set()
     print(f"Već viđeno: {len(seen)} oglasa")
+
+    if not test:
+        # PRIVREMENA DIJAGNOSTIKA — ukloniće se kad zaključamo parser
+        probe("4zida", "https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g=450&valuta=eur")
+        probe("halooglasi", "https://www.halooglasi.com/nekretnine/izdavanje-stanova/beograd-novi-beograd")
+        print("\n===== KRAJ PROBE =====\n")
 
     if test:
         svi = mock_oglasi()
