@@ -80,14 +80,18 @@ def save_seen(seen: set) -> None:
                           encoding="utf-8")
 
 
+# regex za lokacije: granice reči da "blok 6" NE pogodi "blok 67a"
+_LOK_RE = re.compile("|".join(r"\b" + re.escape(k) + r"\b" for k in LOKACIJE), re.I)
+
+
 # ─────────────────────────── filter ───────────────────────────────────
 def prolazi_filter(o: dict) -> bool:
     """Vraća True ako oglas zadovoljava kriterijume."""
     if o.get("cena") is None or o["cena"] > CENA_MAX:
         return False
 
-    tekst = f"{o.get('lokacija','')} {o.get('naslov','')}".lower()
-    if not any(k in tekst for k in LOKACIJE):
+    tekst = f"{o.get('lokacija','')} {o.get('naslov','')}"
+    if not _LOK_RE.search(tekst):
         return False
 
     if o.get("sobe") is not None and o["sobe"] < SOBE_MIN:
@@ -233,35 +237,37 @@ def probe(naziv: str, url: str) -> None:
 
 
 def scrape_4zida() -> list:
-    """Vadi oglase iz schema.org JSON-LD podataka ugrađenih u stranicu."""
+    """Čita HTML kartice oglasa: <a href=.../id> sa ulicom, lokacijom i cenom."""
     url = f"https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g={CENA_MAX}&valuta=eur"
     oglasi, vidjeni = [], set()
-    # par cena+EUR ... itemOffered Apartment @id (puni link ka oglasu)
-    pat = re.compile(
-        r'"price":(\d+),"priceCurrency":"EUR"[^{]*?"itemOffered":\{"@type":"Apartment",'
-        r'"@id":"(https://www\.4zida\.rs/izdavanje-stanova/[^"]+)"'
-    )
+    id_re = re.compile(r"/[0-9a-f]{20,}/?$")     # link oglasa završava dugim ID-em
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
         r.raise_for_status()
-        for cena_s, link in pat.findall(r.text):
-            if link in vidjeni:
+        soup = BeautifulSoup(r.text, "lxml")
+        for a in soup.select('a[href*="/izdavanje-stanova/"]'):
+            href = a.get("href", "")
+            if not id_re.search(href) or href in vidjeni:
                 continue
-            vidjeni.add(link)
-            slug  = link.split("/izdavanje-stanova/")[-1]
-            tekst = slug.replace("-", " ").replace("/", " ")
+            tekst_a = a.get_text(" ", strip=True)
+            m = re.search(r"([\d.]+)\s*€", tekst_a)     # cena unutar kartice
+            if not m:
+                continue
+            vidjeni.add(href)
+            lok_p = a.select_one('p[class*="line-clamp"]')   # "Blok 21, Novi Beograd, Beograd"
+            ul_p  = a.select_one('p[class*="truncate"]')     # ulica
+            lokacija = lok_p.get_text(" ", strip=True) if lok_p else href.replace("-", " ")
+            ulica    = ul_p.get_text(" ", strip=True) if ul_p else ""
             oglasi.append({
-                "id": "4zida-" + link,
-                "naslov": tekst[:80].strip(),
-                "cena": int(cena_s),
-                "lokacija": tekst,
-                "sobe": _sobe_iz_teksta(tekst),
-                "url": link,
+                "id": "4zida-" + href,
+                "naslov": (f"{ulica} — {lokacija}".strip(" —"))[:90] or "Stan",
+                "cena": _broj(m.group(1)),
+                "lokacija": lokacija,
+                "sobe": _sobe_iz_teksta(href),
+                "url": ("https://www.4zida.rs" + href) if href.startswith("/") else href,
             })
-        if not oglasi:   # ako regex ne pogodi — pokaži šta stoji oko podataka
-            i = r.text.find('"itemOffered"')
-            print("  [4zida] DIJAG:",
-                  r.text[max(0, i - 170): i + 120].replace("\n", " ") if i != -1 else "nema 'itemOffered'")
+        if not oglasi:
+            print("  [4zida] DIJAG: 0 kartica — selektor proveriti")
     except Exception as e:
         print(f"  [4zida] greška: {e}")
     print(f"  [4zida] nađeno: {len(oglasi)}")
@@ -344,12 +350,6 @@ def main():
 
     seen = load_seen() if not test else set()
     print(f"Već viđeno: {len(seen)} oglasa")
-
-    if not test:
-        # PRIVREMENO: samo dijagnostika pravog feed-a, bez skidanja/slanja
-        probe("4zida", f"https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g={CENA_MAX}&valuta=eur")
-        print("\n===== KRAJ PROBE3 =====")
-        return
 
     if test:
         svi = mock_oglasi()
