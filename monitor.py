@@ -208,21 +208,28 @@ def _sobe_iz_teksta(t: str):
 # je oglasa našao, da se vidi šta radi.
 
 def probe(naziv: str, url: str) -> None:
-    """Dijagnostika 2: pokaže strukturu oko cena u pravom feed-u pretrage."""
-    print(f"\n===== PROBE2 {naziv} =====")
+    """Dijagnostika 3: široki, čitljivi isečci oko cena (cela kartica)."""
+    print(f"\n===== PROBE3 {naziv} =====")
     print(f"URL: {url}")
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
         t = r.text
-        print(f"status={r.status_code}  duzina={len(t)}")
-        print(f"broj '€' = {t.count('€')}   broj '/izdavanje-stanova/' = {t.count('/izdavanje-stanova/')}")
-        # prozori oko prvih nekoliko '€' (tu je kartica oglasa: link + cena + lokacija)
+        print(f"status={r.status_code}  '€'={t.count('€')}")
         idxs = [m.start() for m in re.finditer("€", t)]
-        for n, i in enumerate(idxs[:4]):
-            isecak = t[max(0, i - 320): i + 60].replace("\n", " ").replace("\t", " ")
-            print(f"\n--- €#{n+1} (poz {i}):\n{isecak}")
+
+        def win(i: int) -> str:
+            isecak = t[max(0, i - 1400): i + 300]
+            # de-escape radi čitljivosti
+            isecak = isecak.replace('\\"', '"').replace("\\u002F", "/")
+            return re.sub(r"\s+", " ", isecak)
+
+        # uzmi 1., srednju i poslednju cenu — da vidimo i promo i obične kartice
+        meta = sorted({0, len(idxs) // 2, len(idxs) - 1})
+        for n in meta:
+            if 0 <= n < len(idxs):
+                print(f"\n--- €#{n+1} ---\n{win(idxs[n])}")
     except Exception as e:
-        print(f"PROBE2 greška: {e}")
+        print(f"PROBE3 greška: {e}")
 
 
 def scrape_4zida() -> list:
@@ -341,7 +348,7 @@ def main():
     if not test:
         # PRIVREMENO: samo dijagnostika pravog feed-a, bez skidanja/slanja
         probe("4zida", f"https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g={CENA_MAX}&valuta=eur")
-        print("\n===== KRAJ PROBE2 =====")
+        print("\n===== KRAJ PROBE3 =====")
         return
 
     if test:
