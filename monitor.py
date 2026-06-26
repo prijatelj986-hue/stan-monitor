@@ -292,37 +292,50 @@ def probe(naziv: str, url: str) -> None:
 
 def fetch_rendered(url: str, wait_selector: str = 'a[href*="/izdavanje-stanova/"]',
                    scrolls: int = 6) -> str:
-    """Otvori stranicu u headless browseru, prihvati kolačiće i skroluj
-    da se učitaju SVI rezultati. Fallback na requests ako Playwright zakaže."""
+    """Otvori stranicu u headless browseru i SAČEKAJ da se učitaju pravi
+    rezultati (preko 20 promo oglasa), pa onda čitaj. Fallback na requests."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
         print(f"  [render] Playwright nedostupan ({e}) — koristim requests")
         return requests.get(url, headers=HEADERS, timeout=30).text
+
+    # JS koji broji prave kartice oglasa (link završava dugim ID-em)
+    broji_js = (
+        "() => Array.from(document.querySelectorAll('a[href*=\"/izdavanje-stanova/\"]'))"
+        ".filter(a => /\\/[0-9a-f]{20,}\\/?$/.test(a.getAttribute('href')||'')).length"
+    )
     try:
         with sync_playwright() as p:
             br = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
             pg = br.new_page(user_agent=HEADERS["User-Agent"], locale="sr-RS",
                              viewport={"width": 1280, "height": 1600})
             pg.goto(url, wait_until="domcontentloaded", timeout=60000)
-            # prihvati kolačiće — bez ovoga 4zida ne učita prave rezultate
+            pg.wait_for_timeout(2500)
+            # prihvati kolačiće ako se pojave (best effort)
             for sel in ['#onetrust-accept-btn-handler',
                         'button:has-text("Prihvati sve")', 'button:has-text("Prihvati")',
                         'button:has-text("Prihvatam")', 'button:has-text("Slažem")',
                         'button:has-text("Accept")']:
                 try:
-                    pg.click(sel, timeout=2500)
-                    break
+                    el = pg.query_selector(sel)
+                    if el and el.is_visible():
+                        el.click(timeout=2000)
+                        break
                 except Exception:
                     pass
+            # KLJUČNO: sačekaj da se učita više od promo dvadesetke
             try:
-                pg.wait_for_selector(wait_selector, timeout=20000)
+                pg.wait_for_function(f"() => ({broji_js})() > 35", timeout=30000)
             except Exception:
-                pass
-            pg.wait_for_timeout(3000)
+                print("  [render] nije prešlo 35 kartica u roku — čitam šta ima")
             for _ in range(scrolls):
                 pg.mouse.wheel(0, 5000)
-                pg.wait_for_timeout(1500)
+                pg.wait_for_timeout(1200)
+            try:
+                print(f"  [render] kartica oglasa u DOM-u: {pg.evaluate(broji_js)}")
+            except Exception:
+                pass
             html = pg.content()
             br.close()
             return html
