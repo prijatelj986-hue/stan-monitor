@@ -236,6 +236,60 @@ def probe(naziv: str, url: str) -> None:
         print(f"PROBE3 greška: {e}")
 
 
+def probe(naziv: str, url: str) -> None:
+    """Osluškuje koje JSON API pozive stranica pravi (tu su pravi oglasi)."""
+    print(f"\n===== PROBE-NET {naziv} =====")
+    print(f"URL: {url}")
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        print(f"Playwright nedostupan: {e}")
+        return
+    hits = []
+    try:
+        with sync_playwright() as p:
+            br = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            pg = br.new_page(user_agent=HEADERS["User-Agent"], locale="sr-RS",
+                             viewport={"width": 1280, "height": 1600})
+
+            def on_resp(resp):
+                try:
+                    ct = resp.headers.get("content-type", "")
+                    if "json" in ct and resp.request.resource_type in ("xhr", "fetch"):
+                        hits.append((resp.status, resp.request.method, resp.url[:180]))
+                except Exception:
+                    pass
+            pg.on("response", on_resp)
+
+            pg.goto(url, wait_until="domcontentloaded", timeout=60000)
+            for sel in ['#onetrust-accept-btn-handler',
+                        'button:has-text("Prihvati")', 'button:has-text("Prihvatam")',
+                        'button:has-text("Slažem")', 'button:has-text("Accept")',
+                        'button:has-text("Prihvati sve")']:
+                try:
+                    pg.click(sel, timeout=2000)
+                    print(f"  kliknuo kolačiće: {sel}")
+                    break
+                except Exception:
+                    pass
+            pg.wait_for_timeout(3500)
+            for _ in range(5):
+                pg.mouse.wheel(0, 5000)
+                pg.wait_for_timeout(1500)
+            kartica = len(pg.query_selector_all('a[href*="/izdavanje-stanova/"]'))
+            print(f"  kartica '/izdavanje-stanova/' u DOM-u: {kartica}")
+            br.close()
+    except Exception as e:
+        print(f"PROBE-NET greška: {e}")
+    print(f"  JSON XHR/fetch zahteva: {len(hits)}")
+    vidjeni = set()
+    for st, met, u in hits:
+        if u in vidjeni:
+            continue
+        vidjeni.add(u)
+        print(f"    {met} {st}  {u}")
+
+
 def fetch_rendered(url: str, wait_selector: str = 'a[href*="/izdavanje-stanova/"]',
                    scrolls: int = 4) -> str:
     """Otvori stranicu u pravom (headless) browseru da se učitaju JS rezultati.
@@ -379,6 +433,12 @@ def main():
 
     seen = load_seen() if not test else set()
     print(f"Već viđeno: {len(seen)} oglasa")
+
+    if not test:
+        # PRIVREMENO: mrežna dijagnostika — koji API daje prave oglase
+        probe("4zida", f"https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g={CENA_MAX}&valuta=eur")
+        print("\n===== KRAJ PROBE-NET =====")
+        return
 
     if test:
         svi = mock_oglasi()
