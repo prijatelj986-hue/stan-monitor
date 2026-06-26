@@ -50,7 +50,7 @@ LIFT_OBAVEZAN     = True   # True = traži lift (prizemlje i 1. sprat prolaze i 
 # terasa i parking se NE filtriraju — samo se prikažu kao oznaka u poruci,
 # jer "slobodna zona" parkinga skoro nikad nije polje na oglasu (zavisi od ulice).
 
-SAJTOVI = ["4zida", "nekretnine"]   # koje izvore da proverava
+SAJTOVI = ["4zida"]   # halooglasi (403) i nekretnine (103) trenutno blokiraju botove
 
 # ════════════════════════════════════════════════════════════════════
 #  (ispod ovoga ne moraš ništa da diraš)
@@ -230,30 +230,35 @@ def probe(naziv: str, url: str) -> None:
 
 
 def scrape_4zida() -> list:
-    url = (f"https://www.4zida.rs/izdavanje-stanova/novi-beograd"
-           f"?cena_d=0&cena_g={CENA_MAX}&valuta=eur")
+    """Vadi oglase iz schema.org JSON-LD podataka ugrađenih u stranicu."""
+    url = f"https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g={CENA_MAX}&valuta=eur"
     oglasi, vidjeni = [], set()
+    # par cena+EUR ... itemOffered Apartment @id (puni link ka oglasu)
+    pat = re.compile(
+        r'"price":(\d+),"priceCurrency":"EUR"[^{]*?"itemOffered":\{"@type":"Apartment",'
+        r'"@id":"(https://www\.4zida\.rs/izdavanje-stanova/[^"]+)"'
+    )
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
         r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
-        for a in soup.select("a[href*='/izdavanje-stanova/']"):
-            href = a.get("href", "")
-            segmenti = [p for p in href.split("/") if p]
-            if len(segmenti) < 3:        # preskoči kategorijske linkove, uzmi samo oglase
+        for cena_s, link in pat.findall(r.text):
+            if link in vidjeni:
                 continue
-            if href in vidjeni:
-                continue
-            vidjeni.add(href)
-            blok = _block_text(a)
+            vidjeni.add(link)
+            slug  = link.split("/izdavanje-stanova/")[-1]
+            tekst = slug.replace("-", " ").replace("/", " ")
             oglasi.append({
-                "id": "4zida-" + href,
-                "naslov": (a.get_text(" ", strip=True)[:80] or "Stan"),
-                "cena": _cena_eur(blok),
-                "lokacija": blok,
-                "sobe": _sobe_iz_teksta(blok),
-                "url": ("https://www.4zida.rs" + href) if href.startswith("/") else href,
+                "id": "4zida-" + link,
+                "naslov": tekst[:80].strip(),
+                "cena": int(cena_s),
+                "lokacija": tekst,
+                "sobe": _sobe_iz_teksta(tekst),
+                "url": link,
             })
+        if not oglasi:   # ako regex ne pogodi — pokaži šta stoji oko podataka
+            i = r.text.find('"itemOffered"')
+            print("  [4zida] DIJAG:",
+                  r.text[max(0, i - 170): i + 120].replace("\n", " ") if i != -1 else "nema 'itemOffered'")
     except Exception as e:
         print(f"  [4zida] greška: {e}")
     print(f"  [4zida] nađeno: {len(oglasi)}")
@@ -336,12 +341,6 @@ def main():
 
     seen = load_seen() if not test else set()
     print(f"Već viđeno: {len(seen)} oglasa")
-
-    if not test:
-        # PRIVREMENA DIJAGNOSTIKA — ukloniće se kad zaključamo parser
-        probe("4zida", "https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g=450&valuta=eur")
-        probe("halooglasi", "https://www.halooglasi.com/nekretnine/izdavanje-stanova/beograd-novi-beograd")
-        print("\n===== KRAJ PROBE =====\n")
 
     if test:
         svi = mock_oglasi()
