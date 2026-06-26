@@ -236,15 +236,44 @@ def probe(naziv: str, url: str) -> None:
         print(f"PROBE3 greška: {e}")
 
 
+def fetch_rendered(url: str, wait_selector: str = 'a[href*="/izdavanje-stanova/"]',
+                   scrolls: int = 4) -> str:
+    """Otvori stranicu u pravom (headless) browseru da se učitaju JS rezultati.
+    Ako Playwright nije dostupan, padne na obični requests (samo promo oglasi)."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        print(f"  [render] Playwright nedostupan ({e}) — koristim requests")
+        return requests.get(url, headers=HEADERS, timeout=30).text
+    try:
+        with sync_playwright() as p:
+            br = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            pg = br.new_page(user_agent=HEADERS["User-Agent"],
+                             locale="sr-RS", viewport={"width": 1280, "height": 1600})
+            pg.goto(url, wait_until="domcontentloaded", timeout=60000)
+            try:
+                pg.wait_for_selector(wait_selector, timeout=20000)
+            except Exception:
+                pass
+            for _ in range(scrolls):           # skroluj da se učitaju i ostali rezultati
+                pg.mouse.wheel(0, 5000)
+                pg.wait_for_timeout(1300)
+            html = pg.content()
+            br.close()
+            return html
+    except Exception as e:
+        print(f"  [render] greška u browseru ({e}) — koristim requests")
+        return requests.get(url, headers=HEADERS, timeout=30).text
+
+
 def scrape_4zida() -> list:
     """Čita HTML kartice oglasa: <a href=.../id> sa ulicom, lokacijom i cenom."""
     url = f"https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g={CENA_MAX}&valuta=eur"
     oglasi, vidjeni = [], set()
     id_re = re.compile(r"/[0-9a-f]{20,}/?$")     # link oglasa završava dugim ID-em
     try:
-        r = requests.get(url, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        html = fetch_rendered(url)
+        soup = BeautifulSoup(html, "lxml")
         for a in soup.select('a[href*="/izdavanje-stanova/"]'):
             href = a.get("href", "")
             if not id_re.search(href) or href in vidjeni:
