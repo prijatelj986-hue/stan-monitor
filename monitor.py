@@ -16,6 +16,7 @@ import json
 import time
 import html
 import pathlib
+import re
 import requests
 from bs4 import BeautifulSoup
 
@@ -163,6 +164,32 @@ def _broj(txt: str):
     except Exception:
         return None
 
+def _cena_eur(text: str):
+    """Nađe broj koji stoji uz € ili 'eur' (cena), ne prvi broj u tekstu."""
+    m = re.search(r'(\d[\d.\s]{1,7})\s*(?:€|eur)', (text or "").lower())
+    return _broj(m.group(1)) if m else None
+
+def _block_text(a) -> str:
+    """Tekst najbliže 'kartice' oko linka (cena često stoji van samog linka)."""
+    node, best = a, a.get_text(" ", strip=True)
+    for _ in range(4):
+        node = node.parent
+        if node is None:
+            break
+        t = node.get_text(" ", strip=True)
+        if 40 <= len(t) <= 700:
+            return t
+    return best
+
+def _debug_uzorak(naziv: str, oglasi: list, n: int = 5) -> None:
+    """Ispiše prvih par oglasa da se vidi kako izgledaju izvučeni podaci."""
+    if not oglasi:
+        return
+    print(f"  [{naziv}] UZORAK prvih {min(n, len(oglasi))}:")
+    for o in oglasi[:n]:
+        print(f"    cena={o.get('cena')} sobe={o.get('sobe')} | "
+              f"{(o.get('lokacija') or '')[:130]}")
+
 def _sobe_iz_teksta(t: str):
     t = (t or "").lower()
     if "garsonjer" in t: return 1.0
@@ -183,77 +210,63 @@ def _sobe_iz_teksta(t: str):
 def scrape_4zida() -> list:
     url = (f"https://www.4zida.rs/izdavanje-stanova/novi-beograd"
            f"?cena_d=0&cena_g={CENA_MAX}&valuta=eur")
-    oglasi = []
+    oglasi, vidjeni = [], set()
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "lxml")
-        # 1) najpre probaj strukturirane JSON-LD podatke (najstabilnije)
-        for tag in soup.find_all("script", {"type": "application/ld+json"}):
-            try:
-                data = json.loads(tag.string or "{}")
-            except Exception:
+        for a in soup.select("a[href*='/izdavanje-stanova/']"):
+            href = a.get("href", "")
+            segmenti = [p for p in href.split("/") if p]
+            if len(segmenti) < 3:        # preskoči kategorijske linkove, uzmi samo oglase
                 continue
-            items = data if isinstance(data, list) else [data]
-            for it in items:
-                if not isinstance(it, dict):
-                    continue
-                if it.get("@type") in ("Product", "Offer", "Apartment", "RealEstateListing"):
-                    oglasi.append({
-                        "id": "4zida-" + str(it.get("url") or it.get("name") or len(oglasi)),
-                        "naslov": it.get("name"),
-                        "cena": _broj(str(it.get("offers", {}).get("price", "")) if isinstance(it.get("offers"), dict) else ""),
-                        "lokacija": it.get("name", ""),
-                        "url": it.get("url"),
-                    })
-        # 2) fallback: kartice iz HTML-a (selektor proveriti na kalibraciji)
-        if not oglasi:
-            for card in soup.select("a[href*='/izdavanje-stanova/']"):
-                naslov = card.get_text(" ", strip=True)
-                href = card.get("href", "")
-                if not href or len(naslov) < 8:
-                    continue
-                oglasi.append({
-                    "id": "4zida-" + href,
-                    "naslov": naslov,
-                    "cena": _broj(naslov),
-                    "lokacija": naslov,
-                    "sobe": _sobe_iz_teksta(naslov),
-                    "url": "https://www.4zida.rs" + href if href.startswith("/") else href,
-                })
+            if href in vidjeni:
+                continue
+            vidjeni.add(href)
+            blok = _block_text(a)
+            oglasi.append({
+                "id": "4zida-" + href,
+                "naslov": (a.get_text(" ", strip=True)[:80] or "Stan"),
+                "cena": _cena_eur(blok),
+                "lokacija": blok,
+                "sobe": _sobe_iz_teksta(blok),
+                "url": ("https://www.4zida.rs" + href) if href.startswith("/") else href,
+            })
     except Exception as e:
         print(f"  [4zida] greška: {e}")
     print(f"  [4zida] nađeno: {len(oglasi)}")
+    _debug_uzorak("4zida", oglasi)
     return oglasi
 
 
 def scrape_nekretnine() -> list:
     url = (f"https://www.nekretnine.rs/stambeni-objekti/stanovi/"
            f"izdavanje-prodaja/izdavanje/grad/beograd/opstina/novi-beograd/"
-           f"cena/0_{CENA_MAX}/lista/po-stranici/20/")
-    oglasi = []
+           f"lista/po-stranici/20/")
+    oglasi, vidjeni = [], set()
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
+        print(f"  [nekretnine] status: {r.status_code}")
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "lxml")
-        for card in soup.select(".offer, .advert-list .row, article"):
-            link = card.select_one("a[href*='/stambeni-objekti/']")
-            if not link:
+        for a in soup.select("a[href*='/stambeni-objekti/']"):
+            href = a.get("href", "")
+            if len([p for p in href.split("/") if p]) < 3 or href in vidjeni:
                 continue
-            naslov = (card.select_one("h2, .offer-title, .text-truncate") or link).get_text(" ", strip=True)
-            cena_t = (card.select_one(".offer-price, .price, [class*='price']") or card).get_text(" ", strip=True)
-            href = link.get("href", "")
+            vidjeni.add(href)
+            blok = _block_text(a)
             oglasi.append({
                 "id": "nekr-" + href,
-                "naslov": naslov,
-                "cena": _broj(cena_t),
-                "lokacija": naslov,
-                "sobe": _sobe_iz_teksta(naslov),
+                "naslov": (a.get_text(" ", strip=True)[:80] or "Stan"),
+                "cena": _cena_eur(blok),
+                "lokacija": blok,
+                "sobe": _sobe_iz_teksta(blok),
                 "url": href if href.startswith("http") else "https://www.nekretnine.rs" + href,
             })
     except Exception as e:
         print(f"  [nekretnine] greška: {e}")
     print(f"  [nekretnine] nađeno: {len(oglasi)}")
+    _debug_uzorak("nekretnine", oglasi)
     return oglasi
 
 
