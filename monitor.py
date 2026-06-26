@@ -291,9 +291,9 @@ def probe(naziv: str, url: str) -> None:
 
 
 def fetch_rendered(url: str, wait_selector: str = 'a[href*="/izdavanje-stanova/"]',
-                   scrolls: int = 4) -> str:
-    """Otvori stranicu u pravom (headless) browseru da se učitaju JS rezultati.
-    Ako Playwright nije dostupan, padne na obični requests (samo promo oglasi)."""
+                   scrolls: int = 6) -> str:
+    """Otvori stranicu u headless browseru, prihvati kolačiće i skroluj
+    da se učitaju SVI rezultati. Fallback na requests ako Playwright zakaže."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
@@ -302,16 +302,27 @@ def fetch_rendered(url: str, wait_selector: str = 'a[href*="/izdavanje-stanova/"
     try:
         with sync_playwright() as p:
             br = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
-            pg = br.new_page(user_agent=HEADERS["User-Agent"],
-                             locale="sr-RS", viewport={"width": 1280, "height": 1600})
+            pg = br.new_page(user_agent=HEADERS["User-Agent"], locale="sr-RS",
+                             viewport={"width": 1280, "height": 1600})
             pg.goto(url, wait_until="domcontentloaded", timeout=60000)
+            # prihvati kolačiće — bez ovoga 4zida ne učita prave rezultate
+            for sel in ['#onetrust-accept-btn-handler',
+                        'button:has-text("Prihvati sve")', 'button:has-text("Prihvati")',
+                        'button:has-text("Prihvatam")', 'button:has-text("Slažem")',
+                        'button:has-text("Accept")']:
+                try:
+                    pg.click(sel, timeout=2500)
+                    break
+                except Exception:
+                    pass
             try:
                 pg.wait_for_selector(wait_selector, timeout=20000)
             except Exception:
                 pass
-            for _ in range(scrolls):           # skroluj da se učitaju i ostali rezultati
+            pg.wait_for_timeout(3000)
+            for _ in range(scrolls):
                 pg.mouse.wheel(0, 5000)
-                pg.wait_for_timeout(1300)
+                pg.wait_for_timeout(1500)
             html = pg.content()
             br.close()
             return html
@@ -433,12 +444,6 @@ def main():
 
     seen = load_seen() if not test else set()
     print(f"Već viđeno: {len(seen)} oglasa")
-
-    if not test:
-        # PRIVREMENO: mrežna dijagnostika — koji API daje prave oglase
-        probe("4zida", f"https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g={CENA_MAX}&valuta=eur")
-        print("\n===== KRAJ PROBE-NET =====")
-        return
 
     if test:
         svi = mock_oglasi()
