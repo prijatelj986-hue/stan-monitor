@@ -24,6 +24,9 @@ jobs:
       - name: Instaliraj zavisnosti
         run: pip install -r requirements.txt
 
+      - name: Instaliraj Chromium (za Playwright)
+        run: python -m playwright install --with-deps chromium
+
       - name: Pokreni proveru
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
