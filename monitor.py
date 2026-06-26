@@ -208,25 +208,21 @@ def _sobe_iz_teksta(t: str):
 # je oglasa našao, da se vidi šta radi.
 
 def probe(naziv: str, url: str) -> None:
-    """Dijagnostika: pokaže kako je podatak spakovan na stranici."""
-    print(f"\n===== PROBE {naziv} =====")
+    """Dijagnostika 2: pokaže strukturu oko cena u pravom feed-u pretrage."""
+    print(f"\n===== PROBE2 {naziv} =====")
     print(f"URL: {url}")
     try:
         r = requests.get(url, headers=HEADERS, timeout=30)
         t = r.text
-        print(f"status={r.status_code}  duzina_html={len(t)}")
-        print(f"__NUXT__={'__NUXT__' in t}  __NUXT_DATA__={'__NUXT_DATA__' in t}  "
-              f"application/json blokova={t.count('application/json')}")
-        for kljuc in ['€', '"price"', '"cena"', 'priceForRent', '"rooms"',
-                      '"structure"', 'eur', 'product-item']:
-            i = t.find(kljuc)
-            if i != -1:
-                isecak = t[max(0, i - 110): i + 170].replace("\n", " ").replace("\t", " ")
-                print(f"--- oko {kljuc!r} (poz {i}): {isecak}")
-            else:
-                print(f"--- {kljuc!r}: NEMA")
+        print(f"status={r.status_code}  duzina={len(t)}")
+        print(f"broj '€' = {t.count('€')}   broj '/izdavanje-stanova/' = {t.count('/izdavanje-stanova/')}")
+        # prozori oko prvih nekoliko '€' (tu je kartica oglasa: link + cena + lokacija)
+        idxs = [m.start() for m in re.finditer("€", t)]
+        for n, i in enumerate(idxs[:4]):
+            isecak = t[max(0, i - 320): i + 60].replace("\n", " ").replace("\t", " ")
+            print(f"\n--- €#{n+1} (poz {i}):\n{isecak}")
     except Exception as e:
-        print(f"PROBE greška: {e}")
+        print(f"PROBE2 greška: {e}")
 
 
 def scrape_4zida() -> list:
@@ -341,6 +337,12 @@ def main():
 
     seen = load_seen() if not test else set()
     print(f"Već viđeno: {len(seen)} oglasa")
+
+    if not test:
+        # PRIVREMENO: samo dijagnostika pravog feed-a, bez skidanja/slanja
+        probe("4zida", f"https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g={CENA_MAX}&valuta=eur")
+        print("\n===== KRAJ PROBE2 =====")
+        return
 
     if test:
         svi = mock_oglasi()
