@@ -3,7 +3,12 @@ name: Provera stanova
 on:
   schedule:
     - cron: "*/30 * * * *"   # svakih 30 min (GitHub zna da kasni par min — to je ok)
-  workflow_dispatch: {}        # dugme za ručno pokretanje
+  workflow_dispatch:           # dugme za ručno pokretanje
+    inputs:
+      probna:
+        description: "Pošalji samo probnu Telegram poruku (test)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write              # da može da upiše seen.json nazad u repo
@@ -31,7 +36,12 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python monitor.py
+        run: |
+          if [ "${{ inputs.probna }}" = "true" ]; then
+            python monitor.py --ping
+          else
+            python monitor.py
+          fi
 
       - name: Sačuvaj stanje (seen.json)
         run: |
