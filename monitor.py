@@ -113,7 +113,7 @@ def prolazi_filter(o: dict) -> bool:
 
 def oznake(o: dict) -> str:
     flags = []
-    if o.get("cena") is not None and o["cena"] <= CENA_IDEALNO:
+    if isinstance(o.get("cena"), (int, float)) and o["cena"] <= CENA_IDEALNO:
         flags.append("⭐ IDEALNO")
     if o.get("terasa") is True:
         flags.append("🌿 terasa")
@@ -125,6 +125,26 @@ def oznake(o: dict) -> str:
 
 
 # ─────────────────────────── Telegram ─────────────────────────────────
+def telegram_tekst(tekst: str) -> None:
+    """Pošalje običnu tekstualnu poruku (za probnu poruku i sl.)."""
+    if not (TG_TOKEN and TG_CHAT):
+        print(tekst)
+        print("  (nije poslato: nedostaje TELEGRAM_BOT_TOKEN/CHAT_ID)")
+        return
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            data={"chat_id": TG_CHAT, "text": tekst, "parse_mode": "HTML"},
+            timeout=20,
+        )
+        if not r.ok:
+            print(f"  Telegram greška: {r.status_code} {r.text[:200]}")
+        else:
+            print("  Telegram: poruka poslata OK")
+    except Exception as e:
+        print(f"  Telegram izuzetak: {e}")
+
+
 def telegram(o: dict, dry: bool = False) -> None:
     sobe   = f"{o['sobe']:g} soban".replace(".5", ".5") if o.get("sobe") else "?"
     sprat  = f"{o['sprat']}. sprat" if o.get("sprat") is not None else "sprat ?"
@@ -457,11 +477,7 @@ def main():
     test = "--test" in sys.argv
 
     if "--ping" in sys.argv:
-        telegram({
-            "naslov": "✅ PROBNA PORUKA — stan-monitor radi",
-            "cena": "—", "lokacija": "Ovo je test da potvrdimo da Telegram stiže.",
-            "sobe": None, "url": "https://www.4zida.rs/izdavanje-stanova/novi-beograd",
-        })
+        telegram_tekst("✅ <b>PROBNA PORUKA</b>\nstan-monitor radi i Telegram stiže. 🎉")
         print("Poslata probna poruka.")
         return
 
