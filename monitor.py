@@ -42,7 +42,7 @@ ISKLJUCI = [
 SOBE_MIN          = 1.5    # 1.5 = jednoiposoban naviše -> garantuje odvojenu spavaću
 STRIKTNO_NAMESTEN = True   # True = preskoči oglase koji NISU namešteni
                            # (oglasi bez podatka o nameštenosti i dalje prolaze, ali sa upozorenjem)
-SPRAT_MAX         = 3      # najviši dozvoljen sprat
+SPRAT_MAX         = 6      # najviši dozvoljen sprat
 LIFT_OBAVEZAN     = True   # True = traži lift (prizemlje i 1. sprat prolaze i bez lifta, zbog kolica)
 
 # terasa i parking se NE filtriraju — samo se prikažu kao oznaka u poruci,
