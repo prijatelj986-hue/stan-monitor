@@ -2,7 +2,7 @@ name: Provera stanova
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # svakih 30 min (GitHub zna da kasni par min — to je ok)
+    - cron: "0 6,17 * * *"   # dvaput dnevno (UTC): ~08h i ~19h po Beogradu (leti)
   workflow_dispatch:           # dugme za ručno pokretanje
     inputs:
       probna:
