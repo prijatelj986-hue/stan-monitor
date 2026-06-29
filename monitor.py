@@ -366,37 +366,41 @@ def fetch_rendered(url: str, ready_js: str = None, min_count: int = 35,
 
 def scrape_4zida() -> list:
     """Čita HTML kartice oglasa: <a href=.../id> sa ulicom, lokacijom i cenom."""
-    url = f"https://www.4zida.rs/izdavanje-stanova/novi-beograd?cena_g={CENA_MAX}&valuta=eur"
+    # cena je u PUTANJI (/do-X-evra), sortirano po najnovijem; NBG + Zemun
+    urls = [
+        f"https://www.4zida.rs/izdavanje-stanova/novi-beograd-beograd/do-{CENA_MAX}-evra?sortiranje=najnoviji",
+        f"https://www.4zida.rs/izdavanje-stanova/zemun-beograd/do-{CENA_MAX}-evra?sortiranje=najnoviji",
+    ]
     oglasi, vidjeni = [], set()
     id_re = re.compile(r"/[0-9a-f]{20,}/?$")     # link oglasa završava dugim ID-em
-    try:
-        html = fetch_rendered(url)
-        soup = BeautifulSoup(html, "lxml")
-        for a in soup.select('a[href*="/izdavanje-stanova/"]'):
-            href = a.get("href", "")
-            if not id_re.search(href) or href in vidjeni:
-                continue
-            tekst_a = a.get_text(" ", strip=True)
-            m = re.search(r"([\d.]+)\s*€", tekst_a)     # cena unutar kartice
-            if not m:
-                continue
-            vidjeni.add(href)
-            lok_p = a.select_one('p[class*="line-clamp"]')   # "Blok 21, Novi Beograd, Beograd"
-            ul_p  = a.select_one('p[class*="truncate"]')     # ulica
-            lokacija = lok_p.get_text(" ", strip=True) if lok_p else href.replace("-", " ")
-            ulica    = ul_p.get_text(" ", strip=True) if ul_p else ""
-            oglasi.append({
-                "id": "4zida-" + href,
-                "naslov": (f"{ulica} — {lokacija}".strip(" —"))[:90] or "Stan",
-                "cena": _broj(m.group(1)),
-                "lokacija": lokacija,
-                "sobe": _sobe_iz_teksta(href),
-                "url": ("https://www.4zida.rs" + href) if href.startswith("/") else href,
-            })
-        if not oglasi:
-            print("  [4zida] DIJAG: 0 kartica — selektor proveriti")
-    except Exception as e:
-        print(f"  [4zida] greška: {e}")
+    for url in urls:
+        try:
+            html = fetch_rendered(url)
+            soup = BeautifulSoup(html, "lxml")
+            for a in soup.select('a[href*="/izdavanje-stanova/"]'):
+                href = a.get("href", "")
+                if not id_re.search(href) or href in vidjeni:
+                    continue
+                tekst_a = a.get_text(" ", strip=True)
+                m = re.search(r"([\d.]+)\s*€", tekst_a)     # cena unutar kartice
+                if not m:
+                    continue
+                vidjeni.add(href)
+                lok_p = a.select_one('p[class*="line-clamp"]')   # "Blok 21, Novi Beograd, Beograd"
+                ul_p  = a.select_one('p[class*="truncate"]')     # ulica
+                lokacija = lok_p.get_text(" ", strip=True) if lok_p else href.replace("-", " ")
+                ulica    = ul_p.get_text(" ", strip=True) if ul_p else ""
+                oglasi.append({
+                    "id": "4zida-" + href,
+                    "naslov": (f"{ulica} — {lokacija}".strip(" —"))[:90] or "Stan",
+                    "cena": _broj(m.group(1)),
+                    "lokacija": lokacija,
+                    "sobe": _sobe_iz_teksta(href),
+                    "url": ("https://www.4zida.rs" + href) if href.startswith("/") else href,
+                })
+        except Exception as e:
+            print(f"  [4zida] greška ({url[:60]}...): {e}")
+        time.sleep(2)
     print(f"  [4zida] nađeno: {len(oglasi)}")
     _debug_uzorak("4zida", oglasi)
     return oglasi
@@ -449,50 +453,56 @@ def _halo_sprat(txt: str):
 
 
 def scrape_halo() -> list:
-    """halooglasi.com — kartice div.product-item sa cenom, lokacijom, sobama, spratom."""
-    url = "https://www.halooglasi.com/nekretnine/izdavanje-stanova/beograd-novi-beograd"
+    """halooglasi.com — kartice div.product-item sa cenom, lokacijom, sobama, spratom.
+    Čita strane 1-2 (sortirano: prvo najnoviji), preskače promovisane bez spama."""
+    baza = ("https://www.halooglasi.com/nekretnine/izdavanje-stanova/beograd-novi-beograd"
+            f"?cena_d_to={CENA_MAX}&cena_d_unit=4")   # cena_d_unit=4 = EUR
     oglasi, vidjeni = [], set()
     ready = "() => document.querySelectorAll('div.product-item[data-id]').length"
-    try:
-        html = fetch_rendered(url, ready_js=ready, min_count=12)
-        soup = BeautifulSoup(html, "lxml")
-        for card in soup.select("div.product-item[data-id]"):
-            did = card.get("data-id")
-            if not did or did in vidjeni:
-                continue
-            vidjeni.add(did)
-            cena_el = card.select_one(".central-feature span[data-value]")
-            cena = _broj(cena_el.get("data-value")) if cena_el else None
-            a = (card.select_one("h3 a[href]")
-                 or card.select_one('a[href*="/nekretnine/izdavanje-stanova/"]'))
-            naslov = a.get_text(" ", strip=True) if a else "Stan"
-            href = a.get("href", "") if a else ""
-            url_o = href if href.startswith("http") else "https://www.halooglasi.com" + href
-            mesta = [li.get_text(" ", strip=True) for li in card.select("ul.subtitle-places li")]
-            lokacija = ", ".join(m for m in mesta if m)
-            sobe = sprat = None
-            for li in card.select("ul.product-features li"):
-                txt = li.get_text(" ", strip=True)
-                low = txt.lower()
-                if "broj soba" in low:
-                    msoba = re.search(r"([\d.]+)", txt)
-                    if msoba:
-                        sobe = float(msoba.group(1))
-                elif "spratnost" in low:
-                    sprat = _halo_sprat(txt)
-            oglasi.append({
-                "id": "halo-" + did,
-                "naslov": naslov[:90],
-                "cena": cena,
-                "lokacija": lokacija,
-                "sobe": sobe,
-                "sprat": sprat,
-                "url": url_o,
-            })
-        if not oglasi:
-            print("  [halo] DIJAG: 0 kartica — selektor proveriti")
-    except Exception as e:
-        print(f"  [halo] greška: {e}")
+    for strana in (1, 2):
+        url = baza if strana == 1 else f"{baza}&page={strana}"
+        pre = len(vidjeni)
+        try:
+            html = fetch_rendered(url, ready_js=ready, min_count=8)
+            soup = BeautifulSoup(html, "lxml")
+            for card in soup.select("div.product-item[data-id]"):
+                did = card.get("data-id")
+                if not did or did in vidjeni:
+                    continue
+                vidjeni.add(did)
+                cena_el = card.select_one(".central-feature span[data-value]")
+                cena = _broj(cena_el.get("data-value")) if cena_el else None
+                a = (card.select_one("h3 a[href]")
+                     or card.select_one('a[href*="/nekretnine/izdavanje-stanova/"]'))
+                naslov = a.get_text(" ", strip=True) if a else "Stan"
+                href = a.get("href", "") if a else ""
+                url_o = href if href.startswith("http") else "https://www.halooglasi.com" + href
+                mesta = [li.get_text(" ", strip=True) for li in card.select("ul.subtitle-places li")]
+                lokacija = ", ".join(m for m in mesta if m)
+                sobe = sprat = None
+                for li in card.select("ul.product-features li"):
+                    txt = li.get_text(" ", strip=True)
+                    low = txt.lower()
+                    if "broj soba" in low:
+                        msoba = re.search(r"([\d.]+)", txt)
+                        if msoba:
+                            sobe = float(msoba.group(1))
+                    elif "spratnost" in low:
+                        sprat = _halo_sprat(txt)
+                oglasi.append({
+                    "id": "halo-" + did,
+                    "naslov": naslov[:90],
+                    "cena": cena,
+                    "lokacija": lokacija,
+                    "sobe": sobe,
+                    "sprat": sprat,
+                    "url": url_o,
+                })
+        except Exception as e:
+            print(f"  [halo] greška (strana {strana}): {e}")
+        if len(vidjeni) == pre:    # strana nije dodala ništa novo — nema dalje
+            break
+        time.sleep(2)
     print(f"  [halo] nađeno: {len(oglasi)}")
     _debug_uzorak("halo", oglasi)
     return oglasi
