@@ -48,7 +48,7 @@ LIFT_OBAVEZAN     = True   # True = traži lift (prizemlje i 1. sprat prolaze i 
 # terasa i parking se NE filtriraju — samo se prikažu kao oznaka u poruci,
 # jer "slobodna zona" parkinga skoro nikad nije polje na oglasu (zavisi od ulice).
 
-SAJTOVI = ["4zida"]   # halooglasi (403) i nekretnine (103) trenutno blokiraju botove
+SAJTOVI = ["4zida", "halo"]   # nekretnine.rs (Cloudflare) zasad isključen
 
 # ════════════════════════════════════════════════════════════════════
 #  (ispod ovoga ne moraš ništa da diraš)
@@ -311,21 +311,22 @@ def probe(naziv: str, url: str) -> None:
         print(f"    {met} {st}  {u}")
 
 
-def fetch_rendered(url: str, wait_selector: str = 'a[href*="/izdavanje-stanova/"]',
+def fetch_rendered(url: str, ready_js: str = None, min_count: int = 35,
                    scrolls: int = 6) -> str:
     """Otvori stranicu u headless browseru i SAČEKAJ da se učitaju pravi
-    rezultati (preko 20 promo oglasa), pa onda čitaj. Fallback na requests."""
+    rezultati, pa onda čitaj. Fallback na requests ako Playwright zakaže.
+    ready_js: JS izraz (arrow fn) koji vraća broj kartica; čeka se da pređe min_count."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
         print(f"  [render] Playwright nedostupan ({e}) — koristim requests")
         return requests.get(url, headers=HEADERS, timeout=30).text
 
-    # JS koji broji prave kartice oglasa (link završava dugim ID-em)
-    broji_js = (
-        "() => Array.from(document.querySelectorAll('a[href*=\"/izdavanje-stanova/\"]'))"
-        ".filter(a => /\\/[0-9a-f]{20,}\\/?$/.test(a.getAttribute('href')||'')).length"
-    )
+    if ready_js is None:   # podrazumevano: 4zida (link sa dugim hex ID-em)
+        ready_js = (
+            "() => Array.from(document.querySelectorAll('a[href*=\"/izdavanje-stanova/\"]'))"
+            ".filter(a => /\\/[0-9a-f]{20,}\\/?$/.test(a.getAttribute('href')||'')).length"
+        )
     try:
         with sync_playwright() as p:
             br = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
@@ -333,7 +334,6 @@ def fetch_rendered(url: str, wait_selector: str = 'a[href*="/izdavanje-stanova/"
                              viewport={"width": 1280, "height": 1600})
             pg.goto(url, wait_until="domcontentloaded", timeout=60000)
             pg.wait_for_timeout(2500)
-            # prihvati kolačiće ako se pojave (best effort)
             for sel in ['#onetrust-accept-btn-handler',
                         'button:has-text("Prihvati sve")', 'button:has-text("Prihvati")',
                         'button:has-text("Prihvatam")', 'button:has-text("Slažem")',
@@ -345,16 +345,15 @@ def fetch_rendered(url: str, wait_selector: str = 'a[href*="/izdavanje-stanova/"
                         break
                 except Exception:
                     pass
-            # KLJUČNO: sačekaj da se učita više od promo dvadesetke
             try:
-                pg.wait_for_function(f"() => ({broji_js})() > 35", timeout=30000)
+                pg.wait_for_function(f"() => ({ready_js})() > {min_count}", timeout=30000)
             except Exception:
-                print("  [render] nije prešlo 35 kartica u roku — čitam šta ima")
+                print(f"  [render] nije prešlo {min_count} kartica u roku — čitam šta ima")
             for _ in range(scrolls):
                 pg.mouse.wheel(0, 5000)
                 pg.wait_for_timeout(1200)
             try:
-                print(f"  [render] kartica oglasa u DOM-u: {pg.evaluate(broji_js)}")
+                print(f"  [render] kartica u DOM-u: {pg.evaluate(ready_js)}")
             except Exception:
                 pass
             html = pg.content()
@@ -435,6 +434,71 @@ def scrape_nekretnine() -> list:
 
 
 SCRAPERI = {"4zida": scrape_4zida, "nekretnine": scrape_nekretnine}
+
+
+def _halo_sprat(txt: str):
+    """'III/7 Spratnost' -> 3 ; 'PR/4' -> 0 ; 'VPR' -> 0 ; '4/7' -> 4."""
+    val = re.split(r"spratnost", txt, flags=re.I)[0].split("/")[0].strip().upper()
+    mapa = {"SUT": -1, "PSUT": -1, "PR": 0, "VPR": 0, "NPR": 0,
+            "I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7,
+            "VIII": 8, "IX": 9, "X": 10, "PK": 50, "PTK": 50}
+    if val in mapa:
+        return mapa[val]
+    m = re.match(r"(\d+)", val)
+    return int(m.group(1)) if m else None
+
+
+def scrape_halo() -> list:
+    """halooglasi.com — kartice div.product-item sa cenom, lokacijom, sobama, spratom."""
+    url = "https://www.halooglasi.com/nekretnine/izdavanje-stanova/beograd-novi-beograd"
+    oglasi, vidjeni = [], set()
+    ready = "() => document.querySelectorAll('div.product-item[data-id]').length"
+    try:
+        html = fetch_rendered(url, ready_js=ready, min_count=12)
+        soup = BeautifulSoup(html, "lxml")
+        for card in soup.select("div.product-item[data-id]"):
+            did = card.get("data-id")
+            if not did or did in vidjeni:
+                continue
+            vidjeni.add(did)
+            cena_el = card.select_one(".central-feature span[data-value]")
+            cena = _broj(cena_el.get("data-value")) if cena_el else None
+            a = (card.select_one("h3 a[href]")
+                 or card.select_one('a[href*="/nekretnine/izdavanje-stanova/"]'))
+            naslov = a.get_text(" ", strip=True) if a else "Stan"
+            href = a.get("href", "") if a else ""
+            url_o = href if href.startswith("http") else "https://www.halooglasi.com" + href
+            mesta = [li.get_text(" ", strip=True) for li in card.select("ul.subtitle-places li")]
+            lokacija = ", ".join(m for m in mesta if m)
+            sobe = sprat = None
+            for li in card.select("ul.product-features li"):
+                txt = li.get_text(" ", strip=True)
+                low = txt.lower()
+                if "broj soba" in low:
+                    msoba = re.search(r"([\d.]+)", txt)
+                    if msoba:
+                        sobe = float(msoba.group(1))
+                elif "spratnost" in low:
+                    sprat = _halo_sprat(txt)
+            oglasi.append({
+                "id": "halo-" + did,
+                "naslov": naslov[:90],
+                "cena": cena,
+                "lokacija": lokacija,
+                "sobe": sobe,
+                "sprat": sprat,
+                "url": url_o,
+            })
+        if not oglasi:
+            print("  [halo] DIJAG: 0 kartica — selektor proveriti")
+    except Exception as e:
+        print(f"  [halo] greška: {e}")
+    print(f"  [halo] nađeno: {len(oglasi)}")
+    _debug_uzorak("halo", oglasi)
+    return oglasi
+
+
+SCRAPERI = {"4zida": scrape_4zida, "nekretnine": scrape_nekretnine, "halo": scrape_halo}
 
 
 # ─────────────────────────── lažni podaci za --test ───────────────────
@@ -528,12 +592,6 @@ def main():
     if "--ping" in sys.argv:
         telegram_tekst("✅ <b>PROBNA PORUKA</b>\nstan-monitor radi i Telegram stiže. 🎉")
         print("Poslata probna poruka.")
-        return
-
-    if not test:
-        # PRIVREMENO: dijagnostika halooglasi
-        probe_halo()
-        print("\n===== KRAJ PROBE HALO =====")
         return
 
     seen = load_seen() if not test else set()
