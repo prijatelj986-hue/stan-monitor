@@ -42,7 +42,7 @@ ISKLJUCI = [
 SOBE_MIN          = 1.5    # 1.5 = jednoiposoban naviše -> garantuje odvojenu spavaću
 STRIKTNO_NAMESTEN = True   # True = preskoči oglase koji NISU namešteni
                            # (oglasi bez podatka o nameštenosti i dalje prolaze, ali sa upozorenjem)
-SPRAT_MAX         = 6      # najviši dozvoljen sprat
+SPRAT_MAX         = 3      # najviši dozvoljen sprat
 LIFT_OBAVEZAN     = True   # True = traži lift (prizemlje i 1. sprat prolaze i bez lifta, zbog kolica)
 
 # terasa i parking se NE filtriraju — samo se prikažu kao oznaka u poruci,
@@ -472,6 +472,55 @@ def mock_oglasi() -> list:
 
 
 # ─────────────────────────── glavni tok ───────────────────────────────
+def probe_halo() -> None:
+    """Dijagnostika za halooglasi: render + kolačići, izbroji oglase i pokaže karticu."""
+    url = "https://www.halooglasi.com/nekretnine/izdavanje-stanova/beograd-novi-beograd"
+    print(f"\n===== PROBE HALO =====\nURL: {url}")
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        print(f"Playwright nedostupan: {e}")
+        return
+    try:
+        with sync_playwright() as p:
+            br = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            pg = br.new_page(user_agent=HEADERS["User-Agent"], locale="sr-RS",
+                             viewport={"width": 1280, "height": 1600})
+            pg.goto(url, wait_until="domcontentloaded", timeout=60000)
+            pg.wait_for_timeout(2500)
+            for sel in ['#onetrust-accept-btn-handler', 'button:has-text("Prihvati")',
+                        'button:has-text("Prihvatam")', 'button:has-text("Slažem")',
+                        'button:has-text("Accept")', 'button:has-text("Prihvati sve")']:
+                try:
+                    el = pg.query_selector(sel)
+                    if el and el.is_visible():
+                        el.click(timeout=2000)
+                        print(f"  kliknuo kolačiće: {sel}")
+                        break
+                except Exception:
+                    pass
+            pg.wait_for_timeout(3000)
+            for _ in range(4):
+                pg.mouse.wheel(0, 5000)
+                pg.wait_for_timeout(1200)
+            t = pg.content()
+            br.close()
+    except Exception as e:
+        print(f"PROBE HALO greška: {e}")
+        return
+
+    soup = BeautifulSoup(t, "lxml")
+    linkovi = soup.select('a[href*="/nekretnine/izdavanje-stanova/"]')
+    print(f"  duzina HTML={len(t)}  linkova ka oglasima={len(linkovi)}  '€' u tekstu={t.count('€')}")
+    # pokaži širi isečak oko prve i srednje cene da vidim strukturu kartice
+    idxs = [m.start() for m in re.finditer("€", t)]
+    for n in sorted({0, len(idxs) // 2}):
+        if 0 <= n < len(idxs):
+            i = idxs[n]
+            isecak = re.sub(r"\s+", " ", t[max(0, i - 1500): i + 200])
+            print(f"\n--- €#{n+1} ---\n{isecak}")
+
+
 def main():
     dry  = "--dry-run" in sys.argv
     test = "--test" in sys.argv
@@ -479,6 +528,12 @@ def main():
     if "--ping" in sys.argv:
         telegram_tekst("✅ <b>PROBNA PORUKA</b>\nstan-monitor radi i Telegram stiže. 🎉")
         print("Poslata probna poruka.")
+        return
+
+    if not test:
+        # PRIVREMENO: dijagnostika halooglasi
+        probe_halo()
+        print("\n===== KRAJ PROBE HALO =====")
         return
 
     seen = load_seen() if not test else set()
